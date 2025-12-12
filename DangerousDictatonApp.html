@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dangerous Dictation (Local Version)</title>
+  <style>
+    :root {
+      --bg: #121212;
+      --surface: #1e1e1e;
+      --text: #e0e0e0;
+      --primary: #bb86fc;
+      --danger: #cf6679;
+      --safe: #03dac6;
+      --border-radius: 8px;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      transition: box-shadow 0.2s ease;
+    }
+
+    body.warning { box-shadow: inset 0 0 50px 10px #cf667955; }
+    body.critical { box-shadow: inset 0 0 100px 30px #cf6679aa; animation: pulse 0.5s infinite; }
+
+    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.95; } 100% { opacity: 1; } }
+    @keyframes shake { 0% { transform: translate(1px, 1px); } 10% { transform: translate(-1px, -2px); } 20% { transform: translate(-3px, 0px); } 30% { transform: translate(3px, 2px); } 40% { transform: translate(1px, -1px); } 50% { transform: translate(-1px, 2px); } 60% { transform: translate(-3px, 1px); } 70% { transform: translate(3px, 1px); } 80% { transform: translate(-1px, -1px); } 90% { transform: translate(1px, 2px); } 100% { transform: translate(1px, -2px); } }
+
+    header {
+      padding: 15px 20px;
+      background: var(--surface);
+      display: flex;
+      gap: 15px;
+      align-items: center;
+      flex-wrap: wrap;
+      border-bottom: 1px solid #333;
+    }
+
+    h1 { font-size: 18px; margin: 0; color: var(--primary); white-space: nowrap; }
+    
+    .controls { display: flex; gap: 10px; align-items: center; flex: 1; }
+    
+    .setting-group {
+      display: flex;
+      align-items: center;
+      background: #2c2c2c;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 13px;
+      border: 1px solid #444;
+    }
+
+    .setting-group label { margin-right: 6px; color: #aaa; }
+    
+    input[type="number"] {
+      background: transparent;
+      border: none;
+      color: #fff;
+      width: 40px;
+      font-weight: bold;
+      text-align: center;
+    }
+
+    button {
+      background: var(--primary);
+      color: #000;
+      border: none;
+      padding: 8px 16px;
+      border-radius: var(--border-radius);
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.stop { background: var(--danger); color: #fff; }
+
+    .status-bar {
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    #silence-meter-wrap {
+      flex: 1;
+      height: 8px;
+      background: #333;
+      border-radius: 999px;
+      overflow: hidden;
+      max-width: 200px;
+      position: relative;
+    }
+    #silence-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--safe);
+      transition: width 0.1s linear, background 0.2s;
+    }
+
+    #editor-container {
+      flex: 1;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    textarea {
+      flex: 1;
+      width: 100%;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 18px;
+      line-height: 1.6;
+      padding: 40px;
+      box-sizing: border-box;
+      resize: none;
+      outline: none;
+    }
+    
+    textarea::placeholder { color: #444; }
+
+    #overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.85);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      text-align: center;
+    }
+    #overlay h2 { font-size: 3rem; margin: 0 0 20px; }
+    .wiped-msg { color: var(--danger); }
+    .success-msg { color: var(--safe); }
+
+    .action-row { display: flex; gap: 10px; margin-top: 20px; }
+    .secondary-btn { background: #444; color: white; }
+
+    /* Visualizer Dot */
+    #mic-visualizer {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #444;
+      margin-right: 10px;
+      transition: transform 0.05s;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Dangerous Dictation</h1>
+    
+    <div class="controls">
+      <div class="setting-group">
+        <label>Min:</label>
+        <input id="sessionMin" type="number" min="1" max="60" value="5">
+      </div>
+      <div class="setting-group">
+        <label>Die in:</label>
+        <input id="silenceSec" type="number" min="2" max="60" value="5">
+        <span style="color:#aaa; font-size:11px;">s</span>
+      </div>
+      <div class="setting-group" id="sens-group">
+        <label>Sens:</label>
+        <input id="threshold" type="number" min="1" max="50" value="10">
+      </div>
+      <div id="mic-visualizer"></div>
+    </div>
+
+    <div class="status-bar">
+      <div id="silence-meter-wrap" title="Silence Meter">
+        <div id="silence-bar"></div>
+      </div>
+      <span id="timeLeft">00:00</span>
+    </div>
+
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" class="stop" disabled>Stop</button>
+  </header>
+
+  <div id="editor-container">
+    <textarea id="out" placeholder="Click Start. Keep speaking. If you stay silent for too long, everything disappears."></textarea>
+    
+    <div id="overlay">
+      <h2 id="overlayTitle"></h2>
+      <p id="overlaySub">Session Ended</p>
+      <div class="action-row">
+        <button class="secondary-btn" id="copyBtn">Copy Text</button>
+        <button class="secondary-btn" id="downloadBtn">Download</button>
+        <button id="closeOverlayBtn">Try Again</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // --- DOM Elements ---
+  const $ = id => document.getElementById(id);
+  const startBtn = $('startBtn');
+  const stopBtn = $('stopBtn');
+  const out = $('out');
+  const timeLeftEl = $('timeLeft');
+  const silenceBar = $('silence-bar');
+  const micVis = $('mic-visualizer');
+  const overlay = $('overlay');
+  
+  // --- State Variables ---
+  let recognition;
+  let audioCtx, analyser, micStream, rafId, sessionTimerId;
+  
+  let isRunning = false;
+  let lastVoiceTime = 0;
+  let sessionEndTime = 0;
+  let finalTranscript = ""; 
+  let audioMode = true; // Will turn false if local file blocks mic access
+
+  // --- Configuration ---
+  const GRACE_PERIOD_MS = 3000; 
+  let sessionStartTime = 0;
+
+  // --- Helpers ---
+  const formatTime = (ms) => {
+    const s = Math.ceil(ms / 1000);
+    const m = Math.floor(s / 60);
+    const rs = s % 60;
+    return `${m}:${rs.toString().padStart(2, '0')}`;
+  };
+
+  const setUIState = (state) => {
+    if (state === 'running') {
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      out.disabled = false;
+      out.focus();
+      overlay.style.display = 'none';
+    } else {
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      document.body.className = '';
+      silenceBar.style.width = '0%';
+    }
+  };
+
+  const showOverlay = (title, type, textContent) => {
+    $('overlayTitle').textContent = title;
+    $('overlayTitle').className = type === 'wipe' ? 'wiped-msg' : 'success-msg';
+    $('overlaySub').textContent = type === 'wipe' 
+      ? "You fell silent. The words are gone." 
+      : `You survived! Word count: ${textContent.trim().split(/\s+/).filter(w => w).length}`;
+    
+    const hasText = textContent.length > 0;
+    $('copyBtn').style.display = hasText ? 'block' : 'none';
+    $('downloadBtn').style.display = hasText ? 'block' : 'none';
+    overlay.style.display = 'flex';
+  };
+
+  // --- Core Audio & Game Logic ---
+
+  async function startSession() {
+    // 1. Setup Speech Recognition
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return alert("Browser not supported. Please use Chrome or Edge.");
+
+    try {
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+      
+      finalTranscript = ""; 
+      out.value = "";
+      
+      // When words arrive, we know you are alive
+      recognition.onresult = (e) => {
+        lastVoiceTime = performance.now(); // Reset death timer
+        
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript + " ";
+          else interim += e.results[i][0].transcript;
+        }
+        out.value = finalTranscript + interim;
+        out.scrollTop = out.scrollHeight;
+      };
+
+      recognition.onerror = (e) => {
+        if(e.error === 'not-allowed') {
+           alert("Please allow Microphone access to use this app.");
+           stopSession('finish');
+        }
+      };
+
+      recognition.onend = () => { if (isRunning) recognition.start(); };
+      recognition.start();
+
+    } catch (e) {
+      alert("Could not start speech recognition: " + e.message);
+      return;
+    }
+
+    // 2. Setup Audio Context (Optional - Adds accuracy, but fails on some local files)
+    audioMode = false;
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      
+      // This is the part that might fail on local files
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const source = audioCtx.createMediaStreamSource(micStream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      audioMode = true; // It worked!
+    } catch (e) {
+      console.log("Audio Context blocked. Falling back to Text-Only mode.");
+      $('sens-group').style.display = 'none'; // Hide sensitivity control if not working
+      $('mic-visualizer').style.background = '#444'; 
+    }
+
+    // 3. Initialize Game State
+    isRunning = true;
+    sessionStartTime = performance.now();
+    lastVoiceTime = performance.now();
+    sessionEndTime = performance.now() + ($('sessionMin').value * 60 * 1000);
+    
+    setUIState('running');
+    startTimers();
+  }
+
+  function stopSession(reason) {
+    isRunning = false;
+    setUIState('stopped');
+
+    if (rafId) cancelAnimationFrame(rafId);
+    if (sessionTimerId) clearInterval(sessionTimerId);
+    try { if (recognition) recognition.stop(); } catch(e) {}
+    
+    // Only wipe if specific fail condition
+    if (reason === 'wipe') {
+      out.value = ""; 
+      document.body.style.animation = "shake 0.5s";
+      setTimeout(() => document.body.style.animation = "", 500);
+      showOverlay("WIPED", 'wipe', "");
+    } else {
+      showOverlay("FINISHED", 'success', out.value);
+    }
+  }
+
+  function startTimers() {
+    const silenceLimitMs = $('silenceSec').value * 1000;
+    const threshold = $('threshold').value;
+
+    // A. Countdown Timer
+    sessionTimerId = setInterval(() => {
+      const remaining = sessionEndTime - performance.now();
+      timeLeftEl.textContent = formatTime(Math.max(0, remaining));
+      if (remaining <= 0) stopSession('finish');
+    }, 1000);
+
+    // B. Danger Loop
+    const loop = () => {
+      if (!isRunning) return;
+      const now = performance.now();
+
+      // IF Audio Context works, we use loudness to keep you alive
+      if (audioMode && analyser) {
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteTimeDomainData(dataArray);
+        
+        let sum = 0;
+        for(let i = 0; i < dataArray.length; i++) {
+          const x = (dataArray[i] - 128) / 128;
+          sum += x * x;
+        }
+        const rms = Math.sqrt(sum / dataArray.length);
+        const loudness = rms * 100;
+
+        micVis.style.transform = `scale(${1 + loudness})`;
+        micVis.style.background = loudness > threshold ? 'var(--safe)' : '#444';
+
+        if (loudness > threshold) lastVoiceTime = now;
+      } 
+
+      // Apply Grace Period
+      if ((now - sessionStartTime) < GRACE_PERIOD_MS) lastVoiceTime = now;
+
+      // Calculate Danger
+      const timeSilent = now - lastVoiceTime;
+      const percentage = Math.min(100, (timeSilent / silenceLimitMs) * 100);
+      
+      silenceBar.style.width = `${percentage}%`;
+      
+      document.body.className = '';
+      if (percentage < 50) {
+        silenceBar.style.background = 'var(--safe)';
+      } else if (percentage < 85) {
+        silenceBar.style.background = 'orange';
+        document.body.classList.add('warning');
+      } else {
+        silenceBar.style.background = 'var(--danger)';
+        document.body.classList.add('critical');
+      }
+
+      if (timeSilent >= silenceLimitMs) {
+        stopSession('wipe');
+        return;
+      }
+
+      rafId = requestAnimationFrame(loop);
+    };
+    rafId = requestAnimationFrame(loop);
+  }
+
+  // --- Event Listeners ---
+  startBtn.onclick = () => {
+    // Basic catch for immediate errors
+    startSession().catch(e => alert("Error starting: " + e));
+  };
+  
+  stopBtn.onclick = () => stopSession('finish');
+  
+  $('closeOverlayBtn').onclick = () => {
+    overlay.style.display = 'none';
+    out.value = "";
+  };
+
+  $('copyBtn').onclick = () => {
+    navigator.clipboard.writeText(out.value);
+    $('copyBtn').textContent = "Copied!";
+    setTimeout(() => $('copyBtn').textContent = "Copy Text", 2000);
+  };
+
+  $('downloadBtn').onclick = () => {
+    const blob = new Blob([out.value], {type: "text/plain"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `dictation-sprint-${new Date().toISOString().slice(0,10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+})();
+</script>
+</body>
+</html>
