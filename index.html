@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Dangerous Dictation (Local Version)</title>
+  <title>Dangerous Dictation (Stable Edit Version)</title>
   <style>
     :root {
       --bg: #121212;
@@ -225,7 +225,7 @@
   let lastVoiceTime = 0;
   let sessionEndTime = 0;
   let finalTranscript = ""; 
-  let audioMode = true; // Will turn false if local file blocks mic access
+  let audioMode = true;
 
   // --- Configuration ---
   const GRACE_PERIOD_MS = 3000; 
@@ -267,39 +267,74 @@
     overlay.style.display = 'flex';
   };
 
+  // --- Helper: Punctuation Normalizer ---
+  const normalizeDictation = (text) => {
+    return text
+      .replace(/\bperiod\b/gi, '.')
+      .replace(/\bcomma\b/gi, ',')
+      .replace(/\bquestion mark\b/gi, '?')
+      .replace(/\bexclamation point\b/gi, '!')
+      .replace(/\bexclamation mark\b/gi, '!')
+      .replace(/\bnew line\b/gi, '\n')
+      .replace(/\bnew paragraph\b/gi, '\n\n');
+  };
+
+  // FIX: Remove unwanted spaces before punctuation like " .", " !", " ?"
+  const tightenPunctuationSpacing = (text) => {
+    return text
+      .replace(/\s+([.!?])/g, '$1')      // "word ." -> "word."
+      .replace(/\s+([,;:])/g, '$1')      // "word ," -> "word,"
+      .replace(/([([{“‘])\s+/g, '$1');   // "( word" -> "(word"
+  };
+
   // --- Core Audio & Game Logic ---
 
   async function startSession() {
-    // 1. Setup Speech Recognition
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return alert("Browser not supported. Please use Chrome or Edge.");
 
     try {
       recognition = new SpeechRecognition();
       recognition.continuous = true;
-      recognition.interimResults = true;
       recognition.lang = "en-US";
+      
+      // FIX 1: Disable interim results to prevent "ghost text" bugs when editing
+      recognition.interimResults = false;
       
       finalTranscript = ""; 
       out.value = "";
       
-      // When words arrive, we know you are alive
       recognition.onresult = (e) => {
-        lastVoiceTime = performance.now(); // Reset death timer
+        lastVoiceTime = performance.now();
         
-        let interim = "";
+        // Because interimResults is false, we only get "Final" chunks now.
+        // This is safer for mixing manual typing with voice.
         for (let i = e.resultIndex; i < e.results.length; i++) {
-          if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript + " ";
-          else interim += e.results[i][0].transcript;
+          if (e.results[i].isFinal) {
+            let text = normalizeDictation(e.results[i][0].transcript);
+            text = tightenPunctuationSpacing(text);
+
+            // Add space if needed (but never before punctuation)
+            if (finalTranscript && !finalTranscript.endsWith(' ') && !finalTranscript.endsWith('\n')) {
+              finalTranscript += " ";
+            }
+            finalTranscript += text;
+
+            // FIX: Clean up any accidental spaces before punctuation that may have been created
+            finalTranscript = tightenPunctuationSpacing(finalTranscript);
+          }
         }
-        out.value = finalTranscript + interim;
+        
+        out.value = finalTranscript;
         out.scrollTop = out.scrollHeight;
       };
 
       recognition.onerror = (e) => {
-        if(e.error === 'not-allowed') {
-           alert("Please allow Microphone access to use this app.");
-           stopSession('finish');
+        if (e.error === 'not-allowed') {
+          alert("Please allow Microphone access to use this app.");
+          stopSession('finish');
+        } else {
+          console.log("Recognition error:", e.error);
         }
       };
 
@@ -311,26 +346,24 @@
       return;
     }
 
-    // 2. Setup Audio Context (Optional - Adds accuracy, but fails on some local files)
+    // 2. Setup Audio Context
     audioMode = false;
     try {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') await audioCtx.resume();
       
-      // This is the part that might fail on local files
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const source = audioCtx.createMediaStreamSource(micStream);
       analyser = audioCtx.createAnalyser();
       analyser.fftSize = 512;
       source.connect(analyser);
-      audioMode = true; // It worked!
+      audioMode = true; 
     } catch (e) {
       console.log("Audio Context blocked. Falling back to Text-Only mode.");
-      $('sens-group').style.display = 'none'; // Hide sensitivity control if not working
+      $('sens-group').style.display = 'none'; 
       $('mic-visualizer').style.background = '#444'; 
     }
 
-    // 3. Initialize Game State
     isRunning = true;
     sessionStartTime = performance.now();
     lastVoiceTime = performance.now();
@@ -348,7 +381,6 @@
     if (sessionTimerId) clearInterval(sessionTimerId);
     try { if (recognition) recognition.stop(); } catch(e) {}
     
-    // Only wipe if specific fail condition
     if (reason === 'wipe') {
       out.value = ""; 
       document.body.style.animation = "shake 0.5s";
@@ -363,19 +395,16 @@
     const silenceLimitMs = $('silenceSec').value * 1000;
     const threshold = $('threshold').value;
 
-    // A. Countdown Timer
     sessionTimerId = setInterval(() => {
       const remaining = sessionEndTime - performance.now();
       timeLeftEl.textContent = formatTime(Math.max(0, remaining));
       if (remaining <= 0) stopSession('finish');
     }, 1000);
 
-    // B. Danger Loop
     const loop = () => {
       if (!isRunning) return;
       const now = performance.now();
 
-      // IF Audio Context works, we use loudness to keep you alive
       if (audioMode && analyser) {
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         analyser.getByteTimeDomainData(dataArray);
@@ -394,10 +423,8 @@
         if (loudness > threshold) lastVoiceTime = now;
       } 
 
-      // Apply Grace Period
       if ((now - sessionStartTime) < GRACE_PERIOD_MS) lastVoiceTime = now;
 
-      // Calculate Danger
       const timeSilent = now - lastVoiceTime;
       const percentage = Math.min(100, (timeSilent / silenceLimitMs) * 100);
       
@@ -424,9 +451,7 @@
     rafId = requestAnimationFrame(loop);
   }
 
-  // --- Event Listeners ---
   startBtn.onclick = () => {
-    // Basic catch for immediate errors
     startSession().catch(e => alert("Error starting: " + e));
   };
   
@@ -452,6 +477,12 @@
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  // FIX 2: Sync Manual Edits
+  // This is now SAFE because we turned off interimResults.
+  out.addEventListener('input', () => {
+    finalTranscript = tightenPunctuationSpacing(out.value);
+  });
 
 })();
 </script>
